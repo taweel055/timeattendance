@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Template Download</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        button { padding: 10px 20px; margin: 10px; font-size: 16px; }
+        .success { color: green; }
+        .error { color: red; }
+        textarea { width: 100%; height: 200px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Template Download Test</h1>
+    
+    <div>
+        <h3>Step 1: Login</h3>
+        <input type="text" id="username" placeholder="Username" value="abdallah">
+        <input type="password" id="password" placeholder="Password" value="abdallah">
+        <button onclick="login()">Login</button>
+        <div id="loginStatus"></div>
+    </div>
+    
+    <div>
+        <h3>Step 2: Test Template Download</h3>
+        <button onclick="downloadTemplate()">Download Template</button>
+        <div id="downloadStatus"></div>
+    </div>
+    
+    <div>
+        <h3>Debug Info</h3>
+        <textarea id="debugInfo" readonly></textarea>
+    </div>
+
+    <script>
+        let token = null;
+        
+        function log(message) {
+            const debug = document.getElementById('debugInfo');
+            debug.value += new Date().toISOString() + ': ' + message + '\n';
+            debug.scrollTop = debug.scrollHeight;
+            console.log(message);
+        }
+        
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const loginStatus = document.getElementById('loginStatus');
+            
+            try {
+                log('Attempting login...');
+                const response = await fetch('http://localhost:5000/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const result = await response.json();
+                log(`Login response: ${JSON.stringify(result)}`);
+                
+                if (response.ok) {
+                    token = result.token;
+                    localStorage.setItem('token', token);
+                    loginStatus.innerHTML = '<span class="success">✅ Login successful!</span>';
+                    log(`Token stored: ${token.substring(0, 20)}...`);
+                } else {
+                    loginStatus.innerHTML = `<span class="error">❌ Login failed: ${result.error}</span>`;
+                    log(`Login failed: ${result.error}`);
+                }
+            } catch (error) {
+                loginStatus.innerHTML = `<span class="error">❌ Login error: ${error.message}</span>`;
+                log(`Login error: ${error.message}`);
+            }
+        }
+        
+        async function downloadTemplate() {
+            const downloadStatus = document.getElementById('downloadStatus');
+            
+            if (!token) {
+                downloadStatus.innerHTML = '<span class="error">❌ Please login first</span>';
+                return;
+            }
+            
+            try {
+                log('Attempting template download...');
+                const response = await fetch('http://localhost:5000/api/attendance/csv-template', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                log(`Download response status: ${response.status}`);
+                log(`Download response headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const text = await blob.text();
+                    log(`CSV content: ${text}`);
+                    
+                    // Create download
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'attendance_template.csv';
+                    a.click();
+                    
+                    downloadStatus.innerHTML = '<span class="success">✅ Template downloaded successfully!</span>';
+                    log('Template download successful');
+                } else {
+                    const errorResult = await response.json();
+                    downloadStatus.innerHTML = `<span class="error">❌ Download failed: ${errorResult.error}</span>`;
+                    log(`Download failed: ${errorResult.error}`);
+                }
+            } catch (error) {
+                downloadStatus.innerHTML = `<span class="error">❌ Download error: ${error.message}</span>`;
+                log(`Download error: ${error.message}`);
+            }
+        }
+        
+        // Check if token exists in localStorage on page load
+        window.onload = function() {
+            const savedToken = localStorage.getItem('token');
+            if (savedToken) {
+                token = savedToken;
+                log(`Found saved token: ${token.substring(0, 20)}...`);
+            }
+        };
+    </script>
+</body>
+</html>

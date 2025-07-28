@@ -1,0 +1,39 @@
+{
+  "name": "fitlife-attendance-tracker",
+  "version": "1.0.0",
+  "description": "FitLife Employee Attendance Tracking System",
+  "scripts": {
+    "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "start": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd backend && npm start",
+    "frontend": "cd frontend && npm start",
+    "dev": "concurrently \"npm run backend-dev\" \"npm run frontend\"",
+    "backend-dev": "cd backend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "seed": "cd backend && node seed.js",
+    "docker:build": "docker build -t attendance-tracker .",
+    "docker:run": "docker run -d -p 80:80 -p 5000:5000 --name attendance-tracker attendance-tracker",
+    "docker:stop": "docker stop attendance-tracker && docker rm attendance-tracker",
+    "docker:compose": "docker-compose up -d",
+    "docker:compose:down": "docker-compose down",
+    "docker:compose:logs": "docker-compose logs -f",
+    "ubuntu:install": "sudo bash ubuntu/scripts/install-ubuntu.sh",
+    "ubuntu:deploy": "sudo cp ubuntu/systemd/*.service /etc/systemd/system/ && sudo systemctl daemon-reload",
+    "backup": "bash ubuntu/scripts/backup.sh",
+    "health": "curl -f http://localhost:5000/api/health || curl -f http://localhost/api/health",
+    "fix-deps": "./fix-dependencies.sh",
+    "check": "./check-installation.sh",
+    "security-fix": "./fix-security-issues.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^7.6.0"
+  },
+  "keywords": [
+    "attendance",
+    "tracking",
+    "employee",
+    "payroll"
+  ],
+  "author": "",
+  "license": "ISC"
+}

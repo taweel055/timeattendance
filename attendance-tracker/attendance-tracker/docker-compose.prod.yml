@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  fitlife-attendance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fitlife-attendance-tracker
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./uploads:/app/backend/uploads
+    environment:
+      - NODE_ENV=production
+      - APP_NAME=FitLife Attendance Tracker
+      - COMPANY_NAME=FitLife
+    networks:
+      - fitlife-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  fitlife-network:
+    driver: bridge
+
+volumes:
+  fitlife-data:
+    driver: local
+  fitlife-logs:
+    driver: local
