@@ -1,18 +1,31 @@
-const express = require('express');
-const db = require('../database');
-const { authenticateToken, authorizeAdmin } = require('../middleware/auth');
+import express, { Response } from 'express';
+import db from '../database';
+import { authenticateToken, authorizeAdmin } from '../middleware/auth';
+import { validateEmployee } from '../middleware/validation';
+import { AuthRequest, Employee } from '../types';
+import cache from '../utils/cache';
 
 const router = express.Router();
 
 // Get all employees
-router.get('/', authenticateToken, (req, res) => {
+router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    const cacheKey = 'employees:all';
+    
+    const cachedEmployees = await cache.get<Employee[]>(cacheKey);
+    if (cachedEmployees) {
+      res.json(cachedEmployees);
+      return;
+    }
+    
     const employees = db.prepare(`
       SELECT e.*, u.username, u.role 
       FROM employees e
       LEFT JOIN users u ON e.user_id = u.id
       ORDER BY e.name
     `).all();
+    
+    await cache.set(cacheKey, employees, 300);
     
     res.json(employees);
   } catch (error) {
@@ -21,12 +34,20 @@ router.get('/', authenticateToken, (req, res) => {
 });
 
 // Get single employee
-router.get('/:id', authenticateToken, (req, res) => {
+router.get('/:id', authenticateToken, validateEmployee.getById, async (req: AuthRequest, res: Response) => {
   try {
+    const cacheKey = `employee:${req.params.id}`;
+    
+    const cachedEmployee = await cache.get<Employee>(cacheKey);
+    if (cachedEmployee) {
+      res.json(cachedEmployee);
+      return;
+    }
+    
     const employee = db.prepare(`
       SELECT e.*, u.username, u.role 
-      FROM employees e
-      LEFT JOIN users u ON e.user_id = u.id
+      FROM employees e 
+      LEFT JOIN users u ON e.user_id = u.id 
       WHERE e.employee_id = ?
     `).get(req.params.id);
     
@@ -34,14 +55,18 @@ router.get('/:id', authenticateToken, (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
     
+    await cache.set(cacheKey, employee, 600);
+    
     res.json(employee);
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch employee' });
+    return;
   }
 });
 
 // Create employee
-router.post('/', authenticateToken, authorizeAdmin, (req, res) => {
+router.post('/', authenticateToken, authorizeAdmin, validateEmployee.create, async (req: AuthRequest, res: Response) => {
   try {
     const {
       employee_id,
@@ -74,12 +99,15 @@ router.post('/', authenticateToken, authorizeAdmin, (req, res) => {
       user_id
     );
 
+    await cache.delPattern('employees:*');
+    await cache.del(`employee:${employee_id}`);
+
     res.status(201).json({
       id: result.lastInsertRowid,
       employee_id,
       message: 'Employee created successfully'
     });
-  } catch (error) {
+  } catch (error: any) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       res.status(400).json({ error: 'Employee ID or email already exists' });
     } else {
@@ -89,7 +117,7 @@ router.post('/', authenticateToken, authorizeAdmin, (req, res) => {
 });
 
 // Update employee
-router.put('/:id', authenticateToken, authorizeAdmin, (req, res) => {
+router.put('/:id', authenticateToken, authorizeAdmin, validateEmployee.update, async (req: AuthRequest, res: Response) => {
   try {
     const {
       name,
@@ -123,14 +151,19 @@ router.put('/:id', authenticateToken, authorizeAdmin, (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
+    await cache.delPattern('employees:*');
+    await cache.del(`employee:${req.params.id}`);
+
     res.json({ message: 'Employee updated successfully' });
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to update employee' });
+    return;
   }
 });
 
 // Delete employee
-router.delete('/:id', authenticateToken, authorizeAdmin, (req, res) => {
+router.delete('/:id', authenticateToken, authorizeAdmin, validateEmployee.delete, async (req: AuthRequest, res: Response) => {
   try {
     const stmt = db.prepare('DELETE FROM employees WHERE employee_id = ?');
     const result = stmt.run(req.params.id);
@@ -139,10 +172,15 @@ router.delete('/:id', authenticateToken, authorizeAdmin, (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
+    await cache.delPattern('employees:*');
+    await cache.del(`employee:${req.params.id}`);
+
     res.json({ message: 'Employee deleted successfully' });
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete employee' });
+    return;
   }
 });
 
-module.exports = router;
+export default router;

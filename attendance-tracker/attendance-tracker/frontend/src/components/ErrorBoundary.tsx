@@ -8,6 +8,7 @@ import {
   Stack 
 } from '@mui/material';
 import { Refresh as RefreshIcon, BugReport as BugIcon } from '@mui/icons-material';
+import logger from '../utils/logger';
 
 interface Props {
   children: React.ReactNode;
@@ -33,10 +34,7 @@ class ErrorBoundary extends React.Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     this.setState({ error, errorInfo });
     
-    // Log to console in development
-    if (process.env.NODE_ENV === 'development') {
-      console.error('ErrorBoundary caught an error:', error, errorInfo);
-    }
+    logger.error('ErrorBoundary caught an error:', { error: error.message, stack: error.stack, componentStack: errorInfo.componentStack });
     
     // In production, you would send to error tracking service
     // Example: Sentry.captureException(error, { extra: errorInfo });

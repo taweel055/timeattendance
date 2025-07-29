@@ -29,6 +29,7 @@ import {
 } from 'chart.js';
 import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import { dashboardApi } from '../services/api';
+import logger from '../utils/logger';
 
 ChartJS.register(
   CategoryScale,
@@ -110,7 +111,7 @@ const Dashboard: React.FC = () => {
       setTopPerformers(performersRes.data);
     } catch (err: any) {
       setError('Failed to load dashboard data');
-      console.error(err);
+      logger.error('Failed to load dashboard data:', err);
     } finally {
       setLoading(false);
     }

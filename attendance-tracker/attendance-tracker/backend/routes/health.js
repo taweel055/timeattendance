@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../database');
+const logger = require('../utils/logger').default;
 
 const router = express.Router();
 
@@ -48,7 +49,7 @@ router.get('/health', (req, res) => {
         
         res.json(health);
     } catch (error) {
-        console.error('Health check failed:', error);
+        logger.error('Health check failed:', { error: error.message, stack: error.stack });
         res.status(503).json({
             status: 'unhealthy',
             error: error.message,
