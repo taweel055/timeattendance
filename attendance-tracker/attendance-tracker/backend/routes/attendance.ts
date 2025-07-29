@@ -1,12 +1,15 @@
-const express = require('express');
-const multer = require('multer');
-const { parse } = require('csv-parse');
-const fs = require('fs');
-const path = require('path');
-const { format, parseISO, differenceInHours, differenceInMinutes } = require('date-fns');
-const db = require('../database');
-const { authenticateToken, authorizeAdmin } = require('../middleware/auth');
-const { calculateHours } = require('../utils/timeCalculations');
+import express, { Response } from 'express';
+import multer from 'multer';
+import { parse } from 'csv-parse';
+import fs from 'fs';
+import path from 'path';
+import { format, differenceInHours, differenceInMinutes } from 'date-fns';
+import db from '../database';
+import { authenticateToken, authorizeAdmin } from '../middleware/auth';
+import { calculateHours } from '../utils/timeCalculations';
+import { validateAttendance } from '../middleware/validation';
+import { AuthRequest, AttendanceRecord, Employee } from '../types';
+import logger from '../utils/logger';
 
 const router = express.Router();
 
@@ -23,7 +26,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Get attendance records
-router.get('/', authenticateToken, (req, res) => {
+router.get('/', authenticateToken, validateAttendance.query, (req: AuthRequest, res: Response) => {
   try {
     const { employee_id, date, start_date, end_date } = req.query;
     let query = 'SELECT * FROM attendance WHERE 1=1';
@@ -106,7 +109,7 @@ router.post('/', authenticateToken, (req, res) => {
 });
 
 // Enhanced Upload CSV attendance with payroll calculations
-router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'), async (req, res) => {
+router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'), async (req: AuthRequest, res: Response) => {
   const startTime = Date.now();
   let uploadBatchId = null;
   
@@ -120,20 +123,27 @@ router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'),
       INSERT INTO upload_history (user_id, filename, file_size, status) 
       VALUES (?, ?, ?, 'processing')
     `);
-    const uploadResult = uploadHistoryStmt.run(req.user.id, req.file.originalname, req.file.size);
+    const uploadResult = uploadHistoryStmt.run(req.user?.id, req.file?.originalname, req.file?.size);
     uploadBatchId = uploadResult.lastInsertRowid;
 
-    const results = [];
-    const errors = [];
     const { calculatePay } = require('../utils/timeCalculations');
 
     // Get employee rates for payroll calculations
     const employees = db.prepare('SELECT employee_id, hourly_rate, overtime_rate FROM employees').all();
-    const employeeRates = new Map(employees.map(e => [e.employee_id, { hourlyRate: e.hourly_rate || 0, overtimeRate: e.overtime_rate || 0 }]));
+    const employeeRates = new Map(employees.map((e: any) => [e.employee_id, { hourlyRate: e.hourly_rate || 0, overtimeRate: e.overtime_rate || 0 }]));
     const employeeNames = db.prepare('SELECT employee_id, name FROM employees').all();
-    const nameToIdMap = new Map(employeeNames.map(e => [e.name.toLowerCase(), e.employee_id]));
+    const nameToIdMap = new Map(employeeNames.map((e: any) => [e.name.toLowerCase(), e.employee_id]));
 
-    // Parse CSV file
+    const BATCH_SIZE = 100; // Process in batches to limit memory usage
+    let batch: any[] = [];
+    let processedCount = 0;
+    let errorCount = 0;
+    let successCount = 0;
+    const recentResults: any[] = [];
+    const recentErrors: any[] = [];
+    const MAX_RECENT_ITEMS = 20; // Only keep recent items for response
+
+    // Parse CSV file with streaming
     const parser = fs.createReadStream(req.file.path).pipe(parse({
       columns: true,
       skip_empty_lines: true,
@@ -151,23 +161,31 @@ router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'),
         }
 
         if (!employeeId) {
-          errors.push({
+          const error = {
             line: lineNumber,
             record,
             errors: ['Employee ID or valid employee name is required'],
             suggestions: ['Download template for valid employee IDs']
-          });
+          };
+          if (recentErrors.length < MAX_RECENT_ITEMS) {
+            recentErrors.push(error);
+          }
+          errorCount++;
           continue;
         }
 
         // Validate employee exists
         if (!employeeRates.has(employeeId)) {
-          errors.push({
+          const error = {
             line: lineNumber,
             record,
             errors: [`Employee ID "${employeeId}" not found in system`],
             suggestions: ['Check employee ID spelling', 'Download current template']
-          });
+          };
+          if (recentErrors.length < MAX_RECENT_ITEMS) {
+            recentErrors.push(error);
+          }
+          errorCount++;
           continue;
         }
 
@@ -186,12 +204,16 @@ router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'),
         if (!clock_out) validationErrors.push('Clock out time is required (HH:MM format)');
 
         if (validationErrors.length > 0) {
-          errors.push({
+          const error = {
             line: lineNumber,
             record,
             errors: validationErrors,
             suggestions: ['Check CSV format', 'Download template for correct format']
-          });
+          };
+          if (recentErrors.length < MAX_RECENT_ITEMS) {
+            recentErrors.push(error);
+          }
+          errorCount++;
           continue;
         }
 
@@ -232,22 +254,53 @@ router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'),
           uploadBatchId
         );
 
-        results.push({ 
-          employee_id: employeeId, 
-          date, 
-          status: 'success',
-          hours: hoursResult.totalHours,
-          pay: payResult.grossPay,
-          line: lineNumber
+        // Add to batch for processing
+        batch.push({
+          employeeId,
+          date,
+          clock_in,
+          clock_out,
+          break_start: break_start || null,
+          break_end: break_end || null,
+          totalHours: hoursResult.totalHours,
+          regularHours: hoursResult.regularHours,
+          overtimeHours: hoursResult.overtimeHours,
+          status: record.status || 'present',
+          notes: record.notes || null,
+          grossPay: payResult.grossPay,
+          regularPay: payResult.regularPay,
+          overtimePay: payResult.overtimePay,
+          lineNumber,
+          userId: req.user?.id
         });
+
+        if (batch.length >= BATCH_SIZE) {
+          const batchResults = await processBatch(batch, recentResults, MAX_RECENT_ITEMS);
+          successCount += batchResults.successCount;
+          errorCount += batchResults.errorCount;
+          batch = []; // Clear batch
+        }
+
       } catch (error) {
-        errors.push({ 
+        const errorItem = {
           line: lineNumber,
-          record, 
-          errors: [error.message],
+          record,
+          errors: [(error as Error).message],
           suggestions: ['Check data format', 'Verify employee exists']
-        });
+        };
+        if (recentErrors.length < MAX_RECENT_ITEMS) {
+          recentErrors.push(errorItem);
+        }
+        errorCount++;
       }
+      
+      processedCount++;
+    }
+
+    if (batch.length > 0) {
+      const batchResults = await processBatch(batch, recentResults, MAX_RECENT_ITEMS);
+      successCount += batchResults.successCount;
+      errorCount += batchResults.errorCount;
     }
 
     // Clean up uploaded file
@@ -262,38 +315,45 @@ router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'),
       WHERE id = ?
     `);
     
-    const errorSummary = errors.length > 0 ? `${errors.length} validation errors` : null;
-    const status = errors.length === 0 ? 'completed' : 'completed_with_errors';
+    const totalRecords = successCount + errorCount;
+    const status = errorCount === 0 ? 'completed' : successCount > 0 ? 'partial' : 'failed';
+    const errorSummary = errorCount > 0 ? 
+      `${errorCount} errors: ${recentErrors.slice(0, 3).map(e => e.errors[0]).join(', ')}` : null;
     
     updateHistoryStmt.run(
-      results.length + errors.length,
-      results.length,
-      errors.length,
+      totalRecords,
+      successCount,
+      errorCount,
       status,
       processingTime,
       errorSummary,
       uploadBatchId
     );
 
-    // Calculate summary totals
-    const totalHours = results.reduce((sum, r) => sum + (r.hours || 0), 0);
-    const totalPay = results.reduce((sum, r) => sum + (r.pay || 0), 0);
+    // Calculate summary totals from recent results
+    const totalHours = recentResults.reduce((sum, r) => sum + (r.total_hours || 0), 0);
+    const totalPay = recentResults.reduce((sum, r) => sum + (r.gross_pay || 0), 0);
 
     res.json({
-      message: 'Upload processed successfully',
+      message: `Upload processed: ${successCount} successful, ${errorCount} failed`,
       upload_batch_id: uploadBatchId,
       summary: {
-        total_records: results.length + errors.length,
-        successful_records: results.length,
-        failed_records: errors.length,
+        total_records: totalRecords,
+        successful_records: successCount,
+        failed_records: errorCount,
         total_hours: Math.round(totalHours * 100) / 100,
         total_pay: Math.round(totalPay * 100) / 100,
-        processing_time: processingTime
+        processing_time: processingTime,
+        memory_optimized: true // Indicate streaming processing was used
       },
-      results: results.slice(0, 20), // First 20 successful records
-      errors: errors.slice(0, 20), // First 20 errors with detailed messages
-      has_more_errors: errors.length > 20
+      results: recentResults, // Recent successful records
+      errors: recentErrors, // Recent errors with detailed messages
+      has_more_errors: errorCount > MAX_RECENT_ITEMS,
+      note: totalRecords > MAX_RECENT_ITEMS ? 
+        `Showing recent ${Math.min(MAX_RECENT_ITEMS, recentResults.length)} results and ${Math.min(MAX_RECENT_ITEMS, recentErrors.length)} errors from ${totalRecords} total records` : 
+        undefined
     });
+    return;
   } catch (error) {
     if (req.file) {
       fs.unlinkSync(req.file.path);
@@ -305,20 +365,85 @@ router.post('/upload', authenticateToken, authorizeAdmin, upload.single('file'),
         UPDATE upload_history 
         SET status = 'failed', error_summary = ?, processing_time = ?
         WHERE id = ?
-      `).run(error.message, (Date.now() - startTime) / 1000, uploadBatchId);
+      `).run((error as Error).message, (Date.now() - startTime) / 1000, uploadBatchId);
     }
     
     console.error('Upload processing error:', error);
     res.status(500).json({ 
       error: 'Failed to process upload',
-      details: error.message,
+      details: (error as Error).message,
       suggestions: ['Check file format', 'Verify employee data', 'Try smaller file']
     });
+    return;
   }
 });
 
+async function processBatch(batch: any[], recentResults: any[], maxRecentItems: number) {
+  const stmt = db.prepare(`
+    INSERT INTO attendance (
+      employee_id, date, clock_in, clock_out, break_start, break_end,
+      total_hours, regular_hours, overtime_hours, status, notes,
+      gross_pay, regular_pay, overtime_pay, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  let successCount = 0;
+  let errorCount = 0;
+
+  // Use transaction for batch processing
+  const transaction = db.transaction((batchItems: any[]) => {
+    for (const item of batchItems) {
+      try {
+        const result = stmt.run(
+          item.employeeId,
+          item.date,
+          item.clock_in,
+          item.clock_out,
+          item.break_start,
+          item.break_end,
+          item.totalHours,
+          item.regularHours,
+          item.overtimeHours,
+          item.status,
+          item.notes,
+          item.grossPay,
+          item.regularPay,
+          item.overtimePay,
+          item.userId
+        );
+
+        if (recentResults.length < maxRecentItems) {
+          recentResults.push({
+            line: item.lineNumber,
+            employee_id: item.employeeId,
+            date: item.date,
+            total_hours: item.totalHours,
+            regular_hours: item.regularHours,
+            overtime_hours: item.overtimeHours,
+            gross_pay: item.grossPay,
+            record_id: result.lastInsertRowid,
+            status: 'success'
+          });
+        }
+        successCount++;
+      } catch (error) {
+        errorCount++;
+      }
+    }
+  });
+
+  try {
+    transaction(batch);
+  } catch (error) {
+    errorCount = batch.length;
+    successCount = 0;
+  }
+
+  return { successCount, errorCount };
+}
+
 // Delete attendance record
-router.delete('/:id', authenticateToken, authorizeAdmin, (req, res) => {
+router.delete('/:id', authenticateToken, authorizeAdmin, (req: AuthRequest, res: Response) => {
   try {
     const stmt = db.prepare('DELETE FROM attendance WHERE id = ?');
     const result = stmt.run(req.params.id);
@@ -328,13 +453,15 @@ router.delete('/:id', authenticateToken, authorizeAdmin, (req, res) => {
     }
 
     res.json({ message: 'Attendance record deleted successfully' });
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete attendance record' });
+    return;
   }
 });
 
 // Bulk Calculate Hours and Pay
-router.post('/calculate-bulk', authenticateToken, (req, res) => {
+router.post('/calculate-bulk', authenticateToken, (req: AuthRequest, res: Response) => {
   try {
     const {
       date_range = {},
@@ -377,7 +504,7 @@ router.post('/calculate-bulk', authenticateToken, (req, res) => {
       
       if (cached) {
         return res.json({
-          ...JSON.parse(cached.results),
+          ...JSON.parse((cached as any).results),
           from_cache: true,
           cache_key: cacheKeyHash
         });
@@ -385,7 +512,7 @@ router.post('/calculate-bulk', authenticateToken, (req, res) => {
     }
 
     const { calculatePay } = require('../utils/timeCalculations');
-    let calculations = [];
+    let calculations: any[] = [];
     let totalHours = 0;
     let totalPay = 0;
     let totalRegularHours = 0;
@@ -418,7 +545,7 @@ router.post('/calculate-bulk', authenticateToken, (req, res) => {
       
       const results = db.prepare(query).all(...queryParams);
       
-      calculations = results.map(row => {
+      calculations = results.map((row: any) => {
         const rates = { hourlyRate: row.hourly_rate || 0, overtimeRate: row.overtime_rate || 0 };
         const hours = { regularHours: row.regular_hours, overtimeHours: row.overtime_hours };
         const pay = calculatePay(hours, rates);
@@ -469,7 +596,7 @@ router.post('/calculate-bulk', authenticateToken, (req, res) => {
       
       const results = db.prepare(query).all(...queryParams);
       
-      calculations = results.map(row => {
+      calculations = results.map((row: any) => {
         const rates = { hourlyRate: row.avg_hourly_rate || 0, overtimeRate: row.avg_overtime_rate || 0 };
         const hours = { regularHours: row.regular_hours, overtimeHours: row.overtime_hours };
         const pay = calculatePay(hours, rates);
@@ -508,7 +635,7 @@ router.post('/calculate-bulk', authenticateToken, (req, res) => {
       
       const results = db.prepare(query).all(...queryParams);
       
-      calculations = results.map(row => {
+      calculations = results.map((row: any) => {
         totalHours += row.total_hours;
         
         return {
@@ -559,12 +686,14 @@ router.post('/calculate-bulk', authenticateToken, (req, res) => {
     );
 
     res.json(response);
+    return;
   } catch (error) {
     console.error('Bulk calculation error:', error);
     res.status(500).json({ 
       error: 'Failed to calculate bulk attendance',
-      details: error.message 
+      details: (error as Error).message 
     });
+    return;
   }
 });
 
@@ -581,7 +710,7 @@ router.get('/csv-template', authenticateToken, authorizeAdmin, (req, res) => {
     const templateHeaders = 'employee_id,employee_name,date,clock_in,break_start,break_end,clock_out';
     
     // Create sample rows for each employee
-    const sampleRows = employees.map(emp => 
+    const sampleRows = employees.map((emp: any) => 
       `${emp.employee_id},"${emp.name}",${today},09:00,12:00,13:00,17:00`
     );
 
@@ -591,27 +720,34 @@ router.get('/csv-template', authenticateToken, authorizeAdmin, (req, res) => {
     db.prepare(`
       INSERT INTO upload_history (user_id, filename, status, total_records) 
       VALUES (?, ?, 'template_download', ?)
-    `).run(req.user.id, `attendance_template_${today}.csv`, employees.length);
+    `).run((req as AuthRequest).user?.id, `attendance_template_${today}.csv`, employees.length);
 
     res.set({
       'Content-Type': 'text/csv',
       'Content-Disposition': `attachment; filename="attendance_template_${today}.csv"`
     });
     res.send(csvContent);
+    return;
   } catch (error) {
     console.error('Template generation error:', error);
     res.status(500).json({ error: 'Failed to generate CSV template' });
+    return;
   }
 });
 
 // CSV Validation - validates file before processing
-router.post('/validate-csv', authenticateToken, authorizeAdmin, upload.single('file'), async (req, res) => {
+router.post('/validate-csv', authenticateToken, authorizeAdmin, upload.single('file'), async (req: AuthRequest, res: Response) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const validationResults = {
+    const validationResults: {
+      valid: boolean;
+      preview: any[];
+      summary: { total_rows: number; valid_rows: number; error_rows: number; warning_rows: number };
+      employee_mapping_suggestions: any[];
+    } = {
       valid: true,
       preview: [],
       summary: { total_rows: 0, valid_rows: 0, error_rows: 0, warning_rows: 0 },
@@ -619,8 +755,8 @@ router.post('/validate-csv', authenticateToken, authorizeAdmin, upload.single('f
     };
 
     const employees = db.prepare('SELECT employee_id, name FROM employees').all();
-    const employeeMap = new Map(employees.map(e => [e.employee_id, e.name]));
-    const nameToIdMap = new Map(employees.map(e => [e.name.toLowerCase(), e.employee_id]));
+    const employeeMap = new Map(employees.map((e: any) => [e.employee_id, e.name]));
+    const nameToIdMap = new Map(employees.map((e: any) => [e.name.toLowerCase(), e.employee_id]));
 
     // Parse CSV
     const parser = fs.createReadStream(req.file.path).pipe(parse({
@@ -720,15 +856,17 @@ router.post('/validate-csv', authenticateToken, authorizeAdmin, upload.single('f
     fs.unlinkSync(req.file.path);
 
     res.json(validationResults);
+    return;
   } catch (error) {
     if (req.file) fs.unlinkSync(req.file.path);
     console.error('Validation error:', error);
     res.status(500).json({ error: 'Failed to validate CSV file' });
+    return;
   }
 });
 
 // Fuzzy employee matching function
-function findFuzzyEmployeeMatch(searchName, employees) {
+function findFuzzyEmployeeMatch(searchName: string, employees: any[]) {
   let bestMatch = { employee_id: null, name: null, confidence: 0 };
   const searchLower = searchName.toLowerCase();
   
@@ -759,38 +897,38 @@ function findFuzzyEmployeeMatch(searchName, employees) {
 }
 
 // Simple string similarity calculation
-function calculateStringSimilarity(str1, str2) {
+function calculateStringSimilarity(str1: string, str2: string) {
   const longer = str1.length > str2.length ? str1 : str2;
   const shorter = str1.length > str2.length ? str2 : str1;
   
   if (longer.length === 0) return 1.0;
   
   const editDistance = levenshteinDistance(longer, shorter);
-  return (longer.length - editDistance) / longer.length;
+  return (longer.length - (editDistance || 0)) / longer.length;
 }
 
-function levenshteinDistance(str1, str2) {
-  const matrix = [];
+function levenshteinDistance(str1: string, str2: string): number {
+  const matrix: number[][] = [];
   for (let i = 0; i <= str2.length; i++) {
     matrix[i] = [i];
   }
   for (let j = 0; j <= str1.length; j++) {
-    matrix[0][j] = j;
+    matrix[0]![j] = j;
   }
   for (let i = 1; i <= str2.length; i++) {
     for (let j = 1; j <= str1.length; j++) {
       if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1];
+        matrix[i]![j] = matrix[i - 1]![j - 1]!;
       } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
+        matrix[i]![j] = Math.min(
+          matrix[i - 1]![j - 1]! + 1,
+          matrix[i]![j - 1]! + 1,
+          matrix[i - 1]![j]! + 1
         );
       }
     }
   }
-  return matrix[str2.length][str1.length];
+  return matrix[str2.length]![str1.length]!;
 }
 
-module.exports = router;
+export default router;

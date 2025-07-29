@@ -1,15 +1,18 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-
-const db = new Database(path.join(__dirname, 'attendance.db'));
-
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+const path_1 = __importDefault(require("path"));
+const databaseProfiler_1 = require("./utils/databaseProfiler");
+const db = new better_sqlite3_1.default(path_1.default.join(__dirname, 'attendance.db'));
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
-
 // Create tables
 const createTables = () => {
-  // Users table
-  db.exec(`
+    // Users table
+    db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
@@ -18,9 +21,8 @@ const createTables = () => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
-
-  // Employees table
-  db.exec(`
+    // Employees table
+    db.exec(`
     CREATE TABLE IF NOT EXISTS employees (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       employee_id TEXT UNIQUE NOT NULL,
@@ -36,9 +38,8 @@ const createTables = () => {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     )
   `);
-
-  // Attendance records table
-  db.exec(`
+    // Attendance records table
+    db.exec(`
     CREATE TABLE IF NOT EXISTS attendance (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       employee_id TEXT NOT NULL,
@@ -57,9 +58,8 @@ const createTables = () => {
       UNIQUE(employee_id, date)
     )
   `);
-
-  // Payroll table
-  db.exec(`
+    // Payroll table
+    db.exec(`
     CREATE TABLE IF NOT EXISTS payroll (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       employee_id TEXT NOT NULL,
@@ -78,9 +78,8 @@ const createTables = () => {
       FOREIGN KEY (employee_id) REFERENCES employees(employee_id) ON DELETE CASCADE
     )
   `);
-
-  // Settings table
-  db.exec(`
+    // Settings table
+    db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       key TEXT UNIQUE NOT NULL,
@@ -88,16 +87,25 @@ const createTables = () => {
       description TEXT
     )
   `);
-
-  // Insert default settings
-  const settings = db.prepare(`INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)`);
-  settings.run('standard_hours_per_day', '8', 'Standard working hours per day');
-  settings.run('overtime_threshold_weekly', '40', 'Weekly hours before overtime kicks in');
-  settings.run('overtime_multiplier', '1.5', 'Overtime pay multiplier');
-  settings.run('break_duration_minutes', '60', 'Standard break duration in minutes');
-  settings.run('currency', 'USD', 'Currency for salary calculations');
+    // Insert default settings
+    const settings = db.prepare(`INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)`);
+    settings.run('standard_hours_per_day', '8', 'Standard working hours per day');
+    settings.run('overtime_threshold_weekly', '40', 'Weekly hours before overtime kicks in');
+    settings.run('overtime_multiplier', '1.5', 'Overtime pay multiplier');
+    settings.run('break_duration_minutes', '60', 'Standard break duration in minutes');
+    settings.run('currency', 'USD', 'Currency for salary calculations');
+    // Create performance indexes
+    db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_attendance_employee_date ON attendance(employee_id, date);
+    CREATE INDEX IF NOT EXISTS idx_attendance_date_range ON attendance(date);
+    CREATE INDEX IF NOT EXISTS idx_employees_lookup ON employees(employee_id, name);
+    CREATE INDEX IF NOT EXISTS idx_employees_name_search ON employees(name COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+    CREATE INDEX IF NOT EXISTS idx_payroll_employee ON payroll(employee_id);
+    CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(period_start, period_end);
+  `);
 };
-
 createTables();
-
-module.exports = db;
+const profiler = new databaseProfiler_1.DatabaseProfiler(db);
+exports.default = db;
+//# sourceMappingURL=database.js.map

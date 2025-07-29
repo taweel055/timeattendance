@@ -1,0 +1,1 @@
+{"error":"UNIQUE constraint failed: users.username","level":"error","message":"Database query failed","service":"attendance-tracker-backend","sql":"INSERT INTO users (username, password, role) VALUES (?, ?, ?)","timestamp":"2025-07-29T00:29:43.306Z"}

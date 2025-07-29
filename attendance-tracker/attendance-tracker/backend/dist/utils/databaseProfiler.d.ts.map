@@ -1,0 +1,1 @@
+{"version":3,"file":"databaseProfiler.d.ts","sourceRoot":"","sources":["../../utils/databaseProfiler.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,QAAQ,EAAE,MAAM,gBAAgB,CAAC;AAK1C,qBAAa,gBAAgB;IAC3B,OAAO,CAAC,EAAE,CAAW;gBAET,QAAQ,EAAE,QAAQ;IAK9B,OAAO,CAAC,cAAc;IA2DtB,kBAAkB,CAAC,SAAS,GAAE,MAAY;;;;;;CAW3C"}

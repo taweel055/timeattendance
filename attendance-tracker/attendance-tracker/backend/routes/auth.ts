@@ -1,12 +1,14 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const db = require('../database');
+import express, { Response } from 'express';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import db from '../database';
+import { validateAuth } from '../middleware/validation';
+import { AuthRequest, User } from '../types';
 
 const router = express.Router();
 
 // Register
-router.post('/register', async (req, res) => {
+router.post('/register', validateAuth.register, async (req: AuthRequest, res: Response) => {
   try {
     const { username, password, role = 'employee' } = req.body;
 
@@ -23,22 +25,25 @@ router.post('/register', async (req, res) => {
       role,
       message: 'User registered successfully' 
     });
-  } catch (error) {
+    return;
+  } catch (error: any) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       res.status(400).json({ error: 'Username already exists' });
+      return;
     } else {
       res.status(500).json({ error: 'Registration failed' });
+      return;
     }
   }
 });
 
 // Login
-router.post('/login', async (req, res) => {
+router.post('/login', validateAuth.login, async (req: AuthRequest, res: Response) => {
   try {
     const { username, password } = req.body;
 
     // Find user
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as User | undefined;
     
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -52,6 +57,10 @@ router.post('/login', async (req, res) => {
     }
 
     // Generate token
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({ error: 'JWT secret not configured' });
+    }
+    
     const token = jwt.sign(
       { id: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
@@ -70,9 +79,11 @@ router.post('/login', async (req, res) => {
         employee: employee
       }
     });
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Login failed' });
+    return;
   }
 });
 
-module.exports = router;
+export default router;

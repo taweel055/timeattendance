@@ -34,6 +34,7 @@ import {
 import { attendanceApi } from '../services/api';
 import { UploadSkeleton, ValidationSkeleton } from './LoadingSkeleton';
 import ErrorBoundary from './ErrorBoundary';
+import logger from '../utils/logger';
 
 interface UploadCenterProps {
   onUploadSuccess?: (results: any) => void;
@@ -117,7 +118,7 @@ const UploadCenter: React.FC<UploadCenterProps> = ({
         onError?.(`Failed to download template: ${errorData.error || response.statusText}`);
       }
     } catch (err: any) {
-      console.error('Template download error:', err);
+      logger.error('Template download error:', err);
       onError?.(`Failed to download template: ${err.message || 'Network error'}`);
     } finally {
       setIsDownloadingTemplate(false);

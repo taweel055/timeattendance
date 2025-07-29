@@ -1,22 +1,36 @@
-const { parse, differenceInMinutes } = require('date-fns');
+import { differenceInMinutes } from 'date-fns';
+import { TimeCalculation, PayCalculation } from '../types';
 
 const STANDARD_HOURS_PER_DAY = 8;
 const OVERTIME_THRESHOLD_DAILY = 8;
 
 // Parse time string to Date object
-const parseTime = (timeStr, dateStr = new Date().toISOString().split('T')[0]) => {
+const parseTime = (timeStr: string, dateStr?: string): Date | null => {
   if (!timeStr) return null;
-  return parse(`${dateStr} ${timeStr}`, 'yyyy-MM-dd HH:mm', new Date());
+  const actualDateStr = dateStr || new Date().toISOString().split('T')[0];
+  const timeParts = timeStr.split(':');
+  const hours = parseInt(timeParts[0] || '0', 10);
+  const minutes = parseInt(timeParts[1] || '0', 10);
+  const date = new Date(actualDateStr + 'T00:00:00.000Z');
+  if (isNaN(date.getTime())) {
+    return null;
+  }
+  date.setHours(hours, minutes, 0, 0);
+  return date;
 };
 
 // Calculate hours between two times
-const calculateHours = ({ clock_in, clock_out, break_start, break_end }) => {
+const calculateHours = ({ clock_in, clock_out, break_start, break_end }: { clock_in: string; clock_out: string; break_start?: string; break_end?: string }): TimeCalculation => {
   if (!clock_in || !clock_out) {
     return { totalHours: 0, regularHours: 0, overtimeHours: 0 };
   }
 
   const clockInTime = parseTime(clock_in);
   const clockOutTime = parseTime(clock_out);
+  
+  if (!clockInTime || !clockOutTime) {
+    return { totalHours: 0, regularHours: 0, overtimeHours: 0 };
+  }
   
   // Calculate total minutes worked
   let totalMinutes = differenceInMinutes(clockOutTime, clockInTime);
@@ -25,8 +39,10 @@ const calculateHours = ({ clock_in, clock_out, break_start, break_end }) => {
   if (break_start && break_end) {
     const breakStartTime = parseTime(break_start);
     const breakEndTime = parseTime(break_end);
-    const breakMinutes = differenceInMinutes(breakEndTime, breakStartTime);
-    totalMinutes -= breakMinutes;
+    if (breakStartTime && breakEndTime) {
+      const breakMinutes = differenceInMinutes(breakEndTime, breakStartTime);
+      totalMinutes -= breakMinutes;
+    }
   }
 
   // Convert to hours
@@ -42,7 +58,7 @@ const calculateHours = ({ clock_in, clock_out, break_start, break_end }) => {
 };
 
 // Calculate weekly totals
-const calculateWeeklyTotals = (attendanceRecords) => {
+const calculateWeeklyTotals = (attendanceRecords: Array<{ total_hours: number }>): TimeCalculation => {
   let totalHours = 0;
   let regularHours = 0;
   let overtimeHours = 0;
@@ -64,7 +80,7 @@ const calculateWeeklyTotals = (attendanceRecords) => {
 };
 
 // Calculate pay based on hours and rates
-const calculatePay = (hours, rates) => {
+const calculatePay = (hours: { regularHours: number; overtimeHours: number }, rates: { hourlyRate: number; overtimeRate: number }): PayCalculation => {
   const { regularHours, overtimeHours } = hours;
   const { hourlyRate, overtimeRate } = rates;
 
@@ -79,7 +95,7 @@ const calculatePay = (hours, rates) => {
   };
 };
 
-module.exports = {
+export {
   parseTime,
   calculateHours,
   calculateWeeklyTotals,

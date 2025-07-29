@@ -1,13 +1,15 @@
-const express = require('express');
-const db = require('../database');
-const { authenticateToken, authorizeAdmin } = require('../middleware/auth');
-const { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } = require('date-fns');
-const { calculateWeeklyTotals, calculatePay } = require('../utils/timeCalculations');
+import express, { Response } from 'express';
+import db from '../database';
+import { authenticateToken, authorizeAdmin } from '../middleware/auth';
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns';
+import { calculateWeeklyTotals, calculatePay } from '../utils/timeCalculations';
+import { validateReports } from '../middleware/validation';
+import { AuthRequest, ReportSummary, DailyReportSummary, WeeklyReportSummary, MonthlyReportSummary } from '../types';
 
 const router = express.Router();
 
 // Get daily report
-router.get('/daily', authenticateToken, (req, res) => {
+router.get('/daily', authenticateToken, validateReports.daily, (req: AuthRequest, res: Response) => {
   try {
     const { date = format(new Date(), 'yyyy-MM-dd') } = req.query;
 
@@ -25,7 +27,7 @@ router.get('/daily', authenticateToken, (req, res) => {
     `).all(date);
 
     // Calculate pay for each record
-    const reportWithPay = dailyReport.map(record => {
+    const reportWithPay = dailyReport.map((record: any) => {
       const pay = calculatePay(
         {
           regularHours: record.regular_hours,
@@ -64,13 +66,15 @@ router.get('/daily', authenticateToken, (req, res) => {
       summary,
       details: reportWithPay
     });
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to generate daily report' });
+    return;
   }
 });
 
 // Get weekly report
-router.get('/weekly', authenticateToken, (req, res) => {
+router.get('/weekly', authenticateToken, validateReports.weekly, (req: AuthRequest, res: Response) => {
   try {
     const { week_start, week_end } = req.query;
     
@@ -106,7 +110,7 @@ router.get('/weekly', authenticateToken, (req, res) => {
     `).all(startDate, endDate);
 
     // Calculate weekly totals and pay
-    const reportData = weeklyData.map(employee => {
+    const reportData = weeklyData.map((employee: any) => {
       // Recalculate weekly overtime
       const weeklyTotals = calculateWeeklyTotals([
         { total_hours: employee.total_hours || 0 }
@@ -153,19 +157,21 @@ router.get('/weekly', authenticateToken, (req, res) => {
       summary,
       details: reportData
     });
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to generate weekly report' });
+    return;
   }
 });
 
 // Get monthly report
-router.get('/monthly', authenticateToken, (req, res) => {
+router.get('/monthly', authenticateToken, validateReports.monthly, (req: AuthRequest, res: Response) => {
   try {
     const { year, month } = req.query;
     
     let startDate, endDate;
     if (year && month) {
-      const date = new Date(year, month - 1);
+      const date = new Date(Number(year), Number(month) - 1);
       startDate = format(startOfMonth(date), 'yyyy-MM-dd');
       endDate = format(endOfMonth(date), 'yyyy-MM-dd');
     } else {
@@ -196,7 +202,7 @@ router.get('/monthly', authenticateToken, (req, res) => {
     `).all(startDate, endDate);
 
     // Calculate pay and prepare report data
-    const reportData = monthlyData.map(employee => {
+    const reportData = monthlyData.map((employee: any) => {
       const pay = calculatePay(
         {
           regularHours: employee.regular_hours || 0,
@@ -254,13 +260,15 @@ router.get('/monthly', authenticateToken, (req, res) => {
       departmentSummary,
       details: reportData
     });
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to generate monthly report' });
+    return;
   }
 });
 
 // Export report as CSV
-router.get('/export/:type', authenticateToken, authorizeAdmin, (req, res) => {
+router.get('/export/:type', authenticateToken, authorizeAdmin, validateReports.export, (req: AuthRequest, res: Response) => {
   try {
     const { type } = req.params;
     const { date, week_start, week_end, year, month } = req.query;
@@ -330,16 +338,18 @@ router.get('/export/:type', authenticateToken, authorizeAdmin, (req, res) => {
       return res.status(404).json({ error: 'No data found for the specified period' });
     }
 
-    const headers = Object.keys(data[0]).join(',');
-    const rows = data.map(row => Object.values(row).join(','));
+    const headers = Object.keys(data[0] as any).join(',');
+    const rows = data.map((row: any) => Object.values(row).join(','));
     const csv = [headers, ...rows].join('\\n');
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(csv);
+    return;
   } catch (error) {
     res.status(500).json({ error: 'Failed to export report' });
+    return;
   }
 });
 
-module.exports = router;
+export default router;

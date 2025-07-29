@@ -1,21 +1,22 @@
 const bcrypt = require('bcryptjs');
 const db = require('./database');
+const logger = require('./utils/logger').default;
 
 async function seed() {
   try {
-    console.log('Starting database seeding...');
+    logger.info('Starting database seeding...');
 
     // Create admin user
     const adminPassword = await bcrypt.hash('admin123', 10);
     const adminStmt = db.prepare('INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)');
     const adminResult = adminStmt.run('admin', adminPassword, 'admin');
-    console.log('Admin user created');
+    logger.info('Admin user created');
 
     // Create employee user
     const empPassword = await bcrypt.hash('emp123', 10);
     const empStmt = db.prepare('INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)');
     const empResult = empStmt.run('employee', empPassword, 'employee');
-    console.log('Employee user created');
+    logger.info('Employee user created');
 
     // Create sample employees
     const employees = [
@@ -96,7 +97,7 @@ async function seed() {
         emp.user_id
       );
     }
-    console.log(`${employees.length} sample employees created`);
+    logger.info(`${employees.length} sample employees created`);
 
     // Create sample attendance records for the current week
     const today = new Date();
@@ -143,15 +144,15 @@ async function seed() {
         );
       }
     }
-    console.log('Sample attendance records created');
+    logger.info('Sample attendance records created');
 
-    console.log('\\nDatabase seeding completed successfully!');
-    console.log('\\nYou can now login with:');
-    console.log('Admin - Username: admin, Password: admin123');
-    console.log('Employee - Username: employee, Password: emp123');
+    logger.info('Database seeding completed successfully!');
+    logger.info('You can now login with:');
+    logger.info('Admin - Username: admin, Password: admin123');
+    logger.info('Employee - Username: employee, Password: emp123');
     
   } catch (error) {
-    console.error('Error seeding database:', error);
+    logger.error('Error seeding database:', { error: error.message, stack: error.stack });
   } finally {
     db.close();
   }

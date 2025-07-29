@@ -54,6 +54,7 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import ConfirmationDialog from '../components/ConfirmationDialog';
 import UploadCenter from '../components/UploadCenter';
 import { TableSkeleton, HeaderSkeleton, FormSkeleton } from '../components/LoadingSkeleton';
+import logger from '../utils/logger';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -206,7 +207,7 @@ const Attendance: React.FC = () => {
       const response = await employeeApi.getAll();
       setEmployees(response.data);
     } catch (err) {
-      console.error('Failed to fetch employees:', err);
+      logger.error('Failed to fetch employees:', err);
       setError('Failed to load employees');
     }
   }, []);
